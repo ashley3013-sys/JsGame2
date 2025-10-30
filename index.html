@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zombie Survival</title>
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; background:#111; }
+  canvas { display:block; background:#222; }
+  #ui {
+    position: absolute; top: 10px; left: 10px;
+    color: white; font-family: monospace; font-size: 18px;
+  }
+  #gameOver, #victory {
+    position: absolute;
+    top: 40%; left: 50%; transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.8); color: white; padding: 20px 40px;
+    border: 2px solid white; border-radius: 10px; display:none;
+    text-align: center;
+  }
+  button {
+    margin-top: 10px; padding: 10px 20px; border:none;
+    background:#0f0; border-radius:5px; font-weight:bold;
+    cursor:pointer;
+  }
+</style>
+</head>
+<body>
+<div id="ui">❤️ <span id="hp"></span> | 🧟‍♂️ Left: <span id="enemiesLeft"></span></div>
+<div id="gameOver">💀 Game Over<br><button onclick="restart()">Restart</button></div>
+<div id="victory">🎉 Victory! You survived!<br><button onclick="restart()">Play Again</button></div>
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = innerWidth;
+canvas.height = innerHeight;
+
+let gameRunning = true;
+let gameWon = false;
+
+const worldWidth = 5000;
+const worldHeight = 2000;
+let camera = { x: 0, y: 0 };
+
+const player = {
+  x: 300, y: 1700, w: 40, h: 60,
+  vx: 0, vy: 0, speed: 3,
+  hp: 100, maxHp: 100,
+  facing: {x:1,y:0}
+};
+
+let bullets = [];
+let enemies = [];
+let walls = [];
+let touchX = 0, touchY = 0, shooting = false;
+
+function makeMap() {
+  walls = [];
+  // Floor
+  walls.push({x:0, y:1760, w:worldWidth, h:40});
+  // Some platforms
+  for(let i=0;i<30;i++){
+    let wx = Math.random()*worldWidth;
+    let wy = 1500 - Math.random()*1000;
+    walls.push({x:wx, y:wy, w:200, h:20});
+  }
+}
+makeMap();
+
+function makeEnemies(){
+  enemies = [];
+  for(let i=0;i<30;i++){
+    let type = Math.floor(Math.random()*3);
+    let e = {
+      x: Math.random()*worldWidth,
+      y: 1600-Math.random()*600,
+      w:40,h:60,
+      vx:0,vy:0,
+      type,
+      hp: type===2?80:type===1?50:30,
+      color: type===2?'purple':type===1?'red':'green'
+    };
+    enemies.push(e);
+  }
+}
+makeEnemies();
+
+function restart(){
+  player.x=300;player.y=1700;player.hp=100;bullets=[];
+  makeEnemies();makeMap();
+  gameRunning=true;gameWon=false;
+  document.getElementById('gameOver').style.display='none';
+  document.getElementById('victory').style.display='none';
+  animate();
+}
+
+function drawPlayer(){
+  ctx.fillStyle='cyan';
+  ctx.fillRect(player.x - camera.x, player.y - camera.y, player.w, player.h);
+}
+
+function drawWalls(){
+  ctx.fillStyle='#555';
+  for(let w of walls)
+    ctx.fillRect(w.x - camera.x, w.y - camera.y, w.w, w.h);
+}
+
+function drawEnemies(){
+  for(let e of enemies){
+    ctx.fillStyle=e.color;
+    ctx.fillRect(e.x - camera.x, e.y - camera.y, e.w, e.h);
+  }
+}
+
+function drawBullets(){
+  ctx.fillStyle='yellow';
+  for(let b of bullets)
+    ctx.fillRect(b.x - camera.x, b.y - camera.y, b.w, b.h);
+}
+
+function drawHpBar(){
+  document.getElementById('hp').textContent = player.hp;
+  document.getElementById('enemiesLeft').textContent = enemies.length;
+}
+
+function updatePlayer(){
+  player.x += player.vx;
+  player.y += player.vy;
+  // Gravity
+  player.vy += 0.3;
+  // Collision
+  for(let w of walls){
+    if(player.x < w.x + w.w &&
+       player.x + player.w > w.x &&
+       player.y < w.y + w.h &&
+       player.y + player.h > w.y){
+      if(player.vy>0) player.y = w.y - player.h;
+      player.vy=0;
+    }
+  }
+}
+
+function updateEnemies(){
+  for(let e of enemies){
+    let dx = player.x - e.x;
+    let dy = player.y - e.y;
+    let dist = Math.hypot(dx,dy);
+    if(dist<800){
+      e.vx = (dx/dist) * (e.type===2?3:(e.type===1?2:1));
+      e.vy = (dy/dist) * 0.2;
+    }
+    e.x += e.vx;
+    e.y += e.vy;
+    if(e.type===2) e.y += Math.sin(Date.now()/200)*2; // flying
+    // Check hit
+    if(collide(e,player)){
+      player.hp -= 0.3*(e.type+1);
+      if(player.hp<=0) gameOver();
+    }
+  }
+}
+
+function updateBullets(){
+  for(let b of bullets){
+    b.x += b.vx;
+    b.y += b.vy;
+    for(let e of enemies){
+      if(collide(b,e)){
+        e.hp -= 20;
+        b.dead = true;
+        if(e.hp<=0) enemies = enemies.filter(x=>x!==e);
+        if(enemies.length===0 && !gameWon) victory();
+      }
+    }
+  }
+  bullets = bullets.filter(b=>!b.dead && b.x>-100 && b.x<worldWidth+100 && b.y>-100 && b.y<worldHeight+100);
+}
+
+function collide(a,b){
+  return a.x<a.x+a.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y;
+}
+
+function shoot(x,y){
+  let dx = x + camera.x - (player.x+player.w/2);
+  let dy = y + camera.y - (player.y+player.h/2);
+  let len = Math.hypot(dx,dy);
+  dx/=len; dy/=len;
+  player.facing = {x:dx,y:dy};
+  bullets.push({
+    x: player.x+player.w/2,
+    y: player.y+player.h/2,
+    w:8,h:8,
+    vx: dx*10, vy: dy*10
+  });
+}
+
+canvas.addEventListener('touchstart', e=>{
+  let t = e.touches[0];
+  shoot(t.clientX,t.clientY);
+});
+
+function gameOver(){
+  gameRunning=false;
+  document.getElementById('gameOver').style.display='block';
+}
+
+function victory(){
+  gameRunning=false; gameWon=true;
+  document.getElementById('victory').style.display='block';
+}
+
+function animate(){
+  if(!gameRunning) return;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  camera.x += ((player.x - canvas.width/2) - camera.x) * 0.1;
+  camera.y += ((player.y - canvas.height/2) - camera.y) * 0.1;
+  drawWalls();
+  drawPlayer();
+  drawEnemies();
+  drawBullets();
+  updatePlayer();
+  updateEnemies();
+  updateBullets();
+  drawHpBar();
+  requestAnimationFrame(animate);
+}
+animate();
+</script>
+</body>
+</html>
